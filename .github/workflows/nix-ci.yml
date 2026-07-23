@@ -91,7 +91,7 @@ jobs:
             
             echo ""
             echo "4. 检查 HTML 格式..."
-            python3 .forgejo/workflows/scripts/check_html.py lang/*.properties
+            python3 .github/workflows/scripts/check_html.py lang/*.properties
             
             echo ""
             echo "=== 检查完成 ==="
@@ -104,7 +104,7 @@ jobs:
             echo ""
             
             # 运行同步脚本
-            python3 .forgejo/workflows/scripts/sync_format.py .
+            python3 .github/workflows/scripts/sync_format.py .
             
             echo ""
             echo "同步完成"
@@ -153,8 +153,8 @@ jobs:
       - name: Validate synced translations
         run: |
           nix shell nixpkgs#python3 --command bash -c '
-            python3 sync_format.py .
-            python3 check_html.py lang/*.properties
+            python3 .github/workflows/scripts/sync_format.py .
+            python3 .github/workflows/scripts/check_html.py lang/*.properties
           '
 
       - name: Commit and push
