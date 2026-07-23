@@ -1,0 +1,166 @@
+name: Nix Translation Check
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v24
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Check translation format
+        run: |
+          nix shell nixpkgs#python3 --command bash -c '
+            echo "=== 翻译格式检查 ==="
+            echo ""
+            
+            # 检查 HTML 格式
+            echo "1. 检查 HTML 属性转义..."
+            for file in lang/*.properties; do
+              echo "检查: $file"
+              
+              # 检查未转义的双引号 (应该都是 \=")
+              if grep -n "onclick=\" " "$file" > /dev/null 2>&1; then
+                echo "发现未转义的 onclick 属性"
+                grep -n "onclick=\" " "$file"
+              fi
+              
+              # 检查双单引号
+              if grep -n "\x27\x27" "$file" > /dev/null 2>&1; then
+                echo "发现双单引号"
+                grep -n "\x27\x27" "$file"
+              fi
+              
+              # 检查转义的单引号 (不应该转义)
+              if grep -n "\\\\\x27" "$file" > /dev/null 2>&1; then
+                echo "发现转义的单引号"
+                grep -n "\\\\\x27" "$file"
+              fi
+            done
+            
+            echo ""
+            echo "2. 检查键的一致性..."
+            
+            # 提取键
+            CN_KEYS=$(grep -E "^[^#]=" lang/lang_zh_CN.properties | cut -d"=" -f1 | sort)
+            EN_KEYS=$(grep -E "^[^#]=" lang/lang_en.properties | cut -d"=" -f1 | sort)
+            TW_KEYS=$(grep -E "^[^#]=" lang/lang_zh_TW.properties | cut -d"=" -f1 | sort)
+            
+            # 比较键
+            if ! diff <(echo "$CN_KEYS") <(echo "$EN_KEYS") > /dev/null 2>&1; then
+              echo "zh_CN 和 en 的键不一致"
+              diff <(echo "$CN_KEYS") <(echo "$EN_KEYS") || true
+              exit 1
+            fi
+            
+            if ! diff <(echo "$CN_KEYS") <(echo "$TW_KEYS") > /dev/null 2>&1; then
+              echo "zh_CN 和 tw 的键不一致"
+              diff <(echo "$CN_KEYS") <(echo "$TW_KEYS") || true
+              exit 1
+            fi
+            
+            echo "键一致性检查通过"
+            
+            echo ""
+            echo "3. 检查编码..."
+            for file in lang/*.properties; do
+              if ! file "$file" | grep -q "UTF-8"; then
+                echo "$file 不是 UTF-8 编码"
+                exit 1
+              fi
+            done
+            echo "编码检查通过"
+            
+            echo ""
+            echo "4. 检查 HTML 格式..."
+            python3 .forgejo/workflows/scripts/check_html.py lang/*.properties
+            
+            echo ""
+            echo "=== 检查完成 ==="
+          '
+
+      - name: Sync format
+        run: |
+          nix shell nixpkgs#python3 --command bash -c '
+            echo "=== 同步翻译格式 ==="
+            echo ""
+            
+            # 运行同步脚本
+            python3 .forgejo/workflows/scripts/sync_format.py .
+            
+            echo ""
+            echo "同步完成"
+          '
+
+      - name: Verify changes
+        run: |
+          if [ -n "$(git diff --name-only)" ]; then
+            echo "以下文件已被修改:"
+            git diff --name-only
+            echo ""
+            echo "格式已自动修复，请提交更改"
+            exit 1
+          fi
+          echo "所有文件格式正确"
+
+  crowdin-sync:
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v24
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Crowdin sync
+        run: |
+          nix shell nixpkgs#nodejs nixpkgs#bash --command bash -c '
+            npm install -g @crowdin/cli
+            crowdin upload sources
+            crowdin download
+          '
+        env:
+          CROWDIN_PROJECT_ID: ${{ secrets.CROWDIN_PROJECT_ID }}
+          CROWDIN_PERSONAL_TOKEN: ${{ secrets.CROWDIN_PERSONAL_TOKEN }}
+
+      - name: Validate synced translations
+        run: |
+          nix shell nixpkgs#python3 --command bash -c '
+            python3 sync_format.py .
+            python3 check_html.py lang/*.properties
+          '
+
+      - name: Commit and push
+        run: |
+          git config user.email "bedevere-win12-bot@users.noreply.codeberg.org"
+          git config user.name "Bedevere-win12-bot"
+          git add -A
+          git diff --staged --quiet || git commit -m "chore: sync translations from Crowdin [skip ci]"
+          git push

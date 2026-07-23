@@ -1,0 +1,33 @@
+name: Crowdin Sync
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: codeberg-medium
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Crowdin sync
+        run: |
+          npm install -g @crowdin/cli
+          crowdin upload sources
+          crowdin download
+        env:
+          CROWDIN_PROJECT_ID: ${{ secrets.CROWDIN_PROJECT_ID }}
+          CROWDIN_PERSONAL_TOKEN: ${{ secrets.CROWDIN_PERSONAL_TOKEN }}
+
+      - name: Commit and push
+        run: |
+          git config user.email "bedevere-win12-bot@users.noreply.codeberg.org"
+          git config user.name "Bedevere-win12-bot"
+          git add -A
+          git diff --staged --quiet || git commit -m "chore: sync translations from Crowdin [skip ci]"
+          git push
