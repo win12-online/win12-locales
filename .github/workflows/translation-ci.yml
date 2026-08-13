@@ -1,0 +1,137 @@
+name: Translation CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: Check translations
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Nix setup
+        uses: cachix/install-nix-action@v24
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Check keys, encoding, and HTML
+        run: |
+          nix shell nixpkgs#python3 --command bash -c '
+            set -euo pipefail
+
+            echo "== Key consistency =="
+            CN_KEYS=$(grep -E "^[^#].*=" lang/lang_zh_CN.properties | cut -d"=" -f1 | sort)
+            EN_KEYS=$(grep -E "^[^#].*=" lang/lang_en.properties | cut -d"=" -f1 | sort)
+            TW_KEYS=$(grep -E "^[^#].*=" lang/lang_zh_TW.properties | cut -d"=" -f1 | sort)
+
+            diff <(echo "$CN_KEYS") <(echo "$EN_KEYS") >/dev/null || {
+              echo "zh_CN and en keys differ:"
+              diff <(echo "$CN_KEYS") <(echo "$EN_KEYS") || true
+              exit 1
+            }
+            diff <(echo "$CN_KEYS") <(echo "$TW_KEYS") >/dev/null || {
+              echo "zh_CN and zh_TW keys differ:"
+              diff <(echo "$CN_KEYS") <(echo "$TW_KEYS") || true
+              exit 1
+            }
+            echo "keys OK"
+
+            echo "== Encoding =="
+            for f in lang/*.properties; do
+              file "$f" | grep -q "UTF-8" || { echo "$f is not UTF-8"; exit 1; }
+            done
+            echo "encoding OK"
+
+            echo "== HTML integrity =="
+            python3 .github/workflows/scripts/check_html.py lang/*.properties
+          '
+
+      - name: Check normalization
+        run: |
+          nix shell nixpkgs#python3 --command bash -c '
+            python3 .github/workflows/scripts/sync_format.py .
+          '
+          if ! git diff --exit-code --quiet; then
+            echo "::error::Translation files are not normalized. Run: python3 .github/workflows/scripts/sync_format.py ."
+            git diff --stat
+            exit 1
+          fi
+          echo "Files are normalized"
+
+  sync:
+    name: Sync translations from Crowdin
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: crowdin-sync
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Nix setup
+        uses: cachix/install-nix-action@v24
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Sync from Crowdin
+        run: |
+          nix shell nixpkgs#nodejs nixpkgs#python3 --command bash -c '
+            set -euo pipefail
+            npm install --prefix "$HOME/crowdin-cli" @crowdin/cli
+            export PATH="$HOME/crowdin-cli/node_modules/.bin:$PATH"
+            crowdin upload sources
+            crowdin download
+          '
+        env:
+          CROWDIN_PROJECT_ID: ${{ secrets.CROWDIN_PROJECT_ID }}
+          CROWDIN_PERSONAL_TOKEN: ${{ secrets.CROWDIN_PERSONAL_TOKEN }}
+
+      - name: Validate synced translations
+        run: |
+          nix shell nixpkgs#python3 --command bash -c '
+            set -euo pipefail
+
+            python3 .github/workflows/scripts/sync_format.py .
+
+            CN_KEYS=$(grep -E "^[^#].*=" lang/lang_zh_CN.properties | cut -d"=" -f1 | sort)
+            EN_KEYS=$(grep -E "^[^#].*=" lang/lang_en.properties | cut -d"=" -f1 | sort)
+            TW_KEYS=$(grep -E "^[^#].*=" lang/lang_zh_TW.properties | cut -d"=" -f1 | sort)
+            diff <(echo "$CN_KEYS") <(echo "$EN_KEYS") >/dev/null || {
+              echo "zh_CN and en keys differ"
+              diff <(echo "$CN_KEYS") <(echo "$EN_KEYS") || true
+              exit 1
+            }
+            diff <(echo "$CN_KEYS") <(echo "$TW_KEYS") >/dev/null || {
+              echo "zh_CN and zh_TW keys differ"
+              diff <(echo "$CN_KEYS") <(echo "$TW_KEYS") || true
+              exit 1
+            }
+
+            python3 .github/workflows/scripts/check_html.py lang/*.properties
+          '
+
+      - name: Commit and push
+        run: |
+          git config user.email "Bedevere-win12-bot@users.noreply.github.com"
+          git config user.name "Bedevere-win12-bot"
+          git add -A
+          git diff --staged --quiet || git commit -m "chore: sync translations from Crowdin [skip ci]"
+          git push

@@ -6,6 +6,5 @@ files:
     translation: /lang/lang_%language%.properties
     languages_mapping:
       language:
-        zh-CN: zh_CN
         zh-TW: zh_TW
         en: en

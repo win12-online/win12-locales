@@ -36,7 +36,7 @@ The project leverages the i18n library to enable multi‑language support, with 
 </a>
 ```
 
-顺便把 `lang_zh_cn` 文件一同完善，感激不尽。<br>Please also help improve the lang_zh_cn file — we would greatly appreciate it.
+顺便把 `lang_zh_CN` 文件一同完善，感激不尽。<br>Please also help improve the lang_zh_CN file — we would greatly appreciate it.
 
 ### 加分项 / Bonus Points
 1. 与 Windows 11 一致的部分，应符合 (尽量) 最新版的原生语言内容<br>For parts that match Windows 11, try to use the latest official native wording.
